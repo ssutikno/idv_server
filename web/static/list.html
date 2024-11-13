@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hosts and VMs</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .host {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+        .host h2 {
+            margin: 0;
+        }
+        .vm {
+            margin-left: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Hosts and VMs</h1>
+
+    <script>
+        function createHost(hostName, ipAddress, username, password, vms) {
+            const hostDiv = document.createElement('div');
+            hostDiv.className = 'host';
+
+            const hostTitle = document.createElement('h2');
+            hostTitle.textContent = `Host: ${hostName}`;
+            hostDiv.appendChild(hostTitle);
+
+            const ipPara = document.createElement('p');
+            ipPara.textContent = `IP Address: ${ipAddress}`;
+            hostDiv.appendChild(ipPara);
+
+            // const userPara = document.createElement('p');
+            // userPara.textContent = `Username: ${username}`;
+            // hostDiv.appendChild(userPara);
+
+            // const passPara = document.createElement('p');
+            // passPara.textContent = `Password: ${password}`;
+            // hostDiv.appendChild(passPara);
+
+            // print log of vms in the console
+            // console.log('VMS : ',vms);
+            vms.forEach(vm => {
+                const vmDiv = document.createElement('div');
+                vmDiv.className = 'vm';
+
+                const vmTitle = document.createElement('h3');
+                vmTitle.textContent = `VM: ${vm.Name}`;
+                vmDiv.appendChild(vmTitle);
+
+                const vmStatus = document.createElement('p');
+                vmStatus.textContent = `Status: ${vm.Status}`;
+                vmDiv.appendChild(vmStatus);
+
+                hostDiv.appendChild(vmDiv);
+            });
+
+            document.body.appendChild(hostDiv);
+        }
+
+        // Example usage:
+        document.addEventListener('DOMContentLoaded', function() {
+            // get hosts from the server /gethosts
+            fetch('/gethost')
+                .then(response => response.json())
+                .then(hosts => {
+                    hosts.forEach(host => {
+                        // log the host to the console
+                        // console.log('Host : ', host.VMs);
+                        createHost(host.Hostname, host.IP, host.Username, host.Password, host.VMs);
+                    });
+                });
+        });
+    </script>
+</body>
+</html>

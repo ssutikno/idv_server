@@ -1,265 +1,126 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
-	"net/http"
-	"sync"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"os"
 
-	"github.com/gorilla/mux"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
 )
 
 type VM struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	Name   string `json:"Name"`
+	Status string `json:"Status"`
 }
 
 type Host struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	VMs  []VM   `json:"vms"`
+	Hostname string `json:"Hostname"`
+	IP       string `json:"IP"`
+	Port     string `json:"Port"`
+	Username string `json:"Username"`
+	Password string `json:"Password"`
+	VMs      []VM   `json:"VMs"`
 }
 
-var (
-	hosts = make(map[string]Host)
-	mu    sync.Mutex
-)
+type Hosts struct {
+	Hosts []Host `json:"hosts"`
+}
+
+func getHosts() []Host {
+	// read hosts from json file
+	file, _ := os.ReadFile("config.json")
+	// log.Println(string(file))
+
+	var hosts Hosts
+	// unmarshal json to Host struct
+
+	err := json.Unmarshal(file, &hosts)
+	if err != nil {
+		log.Fatalf("Error unmarshalling hosts: %v", err)
+	}
+
+	// log.Println(hosts)
+	// get VMs for each host
+
+	for i, host := range hosts.Hosts {
+		hosts.Hosts[i].VMs = getVMs(host)
+	}
+	// log.Println(hosts.Hosts)
+
+	return hosts.Hosts
+}
+
+func getVMs(host Host) []VM {
+	// First call to get the token
+	authURL := fmt.Sprintf("http://%s:%s/login", host.IP, host.Port)
+
+	authPayload := map[string]string{
+		"username": host.Username,
+		"password": host.Password,
+	}
+	// log.Println("Auth URL:", authURL)
+	authBody, _ := json.Marshal(authPayload)
+	authResp, err := http.Post(authURL, "application/json", bytes.NewBuffer(authBody))
+	if err != nil {
+		fmt.Println("Error authenticating:", err)
+		return nil
+	}
+	defer authResp.Body.Close()
+
+	authData, _ := ioutil.ReadAll(authResp.Body)
+
+	var authResult map[string]string
+	json.Unmarshal(authData, &authResult)
+	token := authResult["token"]
+
+	// log.Println("Token:", token)
+
+	// Second call to get the VMs
+	vmsURL := fmt.Sprintf("http://%s:%s/api/vms", host.IP, host.Port)
+	client := &http.Client{}
+	req, _ := http.NewRequest("GET", vmsURL, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	vmsResp, err := client.Do(req)
+	if err != nil {
+		fmt.Println("Error fetching VMs:", err)
+		return nil
+	}
+	defer vmsResp.Body.Close()
+
+	vmsData, _ := ioutil.ReadAll(vmsResp.Body)
+	// log.Println("VMs:", string(vmsData))
+	var vms []VM
+	json.Unmarshal(vmsData, &vms)
+
+	return vms
+}
 
 func main() {
-	r := mux.NewRouter()
-	r.HandleFunc("/hosts", createHost).Methods("POST")
-	r.HandleFunc("/hosts/{id}", getHost).Methods("GET")
-	r.HandleFunc("/hosts/{id}", updateHost).Methods("PUT")
-	r.HandleFunc("/hosts/{id}", deleteHost).Methods("DELETE")
-	r.HandleFunc("/hosts/{id}/vms", createVM).Methods("POST")
-	r.HandleFunc("/hosts/{hostId}/vms/{vmId}", getVM).Methods("GET")
-	r.HandleFunc("/hosts/{hostId}/vms/{vmId}/start", startVM).Methods("POST")
-	r.HandleFunc("/hosts/{hostId}/vms/{vmId}/reboot", rebootVM).Methods("POST")
-	r.HandleFunc("/hosts/{hostId}/vms/{vmId}/reset", resetVM).Methods("POST")
-	r.HandleFunc("/hosts/{hostId}/vms/{vmId}/shutdown", shutdownVM).Methods("POST")
-	r.HandleFunc("/hosts/{hostId}/vms/{vmId}/destroy", destroyVM).Methods("POST")
-	r.HandleFunc("/hosts/{hostId}/vms/{vmId}/copy", copyVM).Methods("POST")
-	r.HandleFunc("/hosts/{hostId}/vms/{vmId}", deleteVM).Methods("DELETE")
+	r := gin.Default()
+	r.GET("/ping", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "pong",
+		})
+	})
 
-	http.ListenAndServe(":8080", r)
-}
+	r.GET("/gethost", func(c *gin.Context) {
+		hosts := getHosts()
+		c.JSON(http.StatusOK, hosts)
+	})
 
-func createHost(w http.ResponseWriter, r *http.Request) {
-	var host Host
-	if err := json.NewDecoder(r.Body).Decode(&host); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+	r.POST("/getvms", func(c *gin.Context) {
+		var host Host
+		c.BindJSON(&host)
+		vms := getVMs(host)
+		c.JSON(http.StatusOK, vms)
+	})
 
-	mu.Lock()
-	defer mu.Unlock()
-	hosts[host.ID] = host
+	r.Static("/static", "./web/static")
+	r.Run(":8080")
 
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(host)
-}
-
-func getHost(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	hostID := vars["id"]
-
-	mu.Lock()
-	defer mu.Unlock()
-	host, exists := hosts[hostID]
-	if !exists {
-		http.Error(w, "Host not found", http.StatusNotFound)
-		return
-	}
-
-	json.NewEncoder(w).Encode(host)
-}
-
-func createVM(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	hostID := vars["id"]
-
-	var vm VM
-	if err := json.NewDecoder(r.Body).Decode(&vm); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	host, exists := hosts[hostID]
-	if !exists {
-		http.Error(w, "Host not found", http.StatusNotFound)
-		return
-	}
-
-	host.VMs = append(host.VMs, vm)
-	hosts[hostID] = host
-
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(vm)
-}
-
-func getVM(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	hostID := vars["hostId"]
-	vmID := vars["vmId"]
-
-	mu.Lock()
-	defer mu.Unlock()
-	host, exists := hosts[hostID]
-	if !exists {
-		http.Error(w, "Host not found", http.StatusNotFound)
-		return
-	}
-
-	for _, vm := range host.VMs {
-		if vm.ID == vmID {
-			json.NewEncoder(w).Encode(vm)
-			return
-		}
-	}
-
-	http.Error(w, "VM not found", http.StatusNotFound)
-}
-
-func startVM(w http.ResponseWriter, r *http.Request) {
-	changeVMStatus(w, r, "started")
-}
-
-func rebootVM(w http.ResponseWriter, r *http.Request) {
-	changeVMStatus(w, r, "rebooted")
-}
-
-func resetVM(w http.ResponseWriter, r *http.Request) {
-	changeVMStatus(w, r, "reset")
-}
-
-func shutdownVM(w http.ResponseWriter, r *http.Request) {
-	changeVMStatus(w, r, "shutdown")
-}
-
-func destroyVM(w http.ResponseWriter, r *http.Request) {
-	changeVMStatus(w, r, "destroyed")
-}
-
-func copyVM(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	hostID := vars["hostId"]
-	vmID := vars["vmId"]
-
-	mu.Lock()
-	defer mu.Unlock()
-	host, exists := hosts[hostID]
-	if !exists {
-		http.Error(w, "Host not found", http.StatusNotFound)
-		return
-	}
-
-	for _, vm := range host.VMs {
-		if vm.ID == vmID {
-			newVM := vm
-			newVM.ID = vm.ID + "_copy"
-			host.VMs = append(host.VMs, newVM)
-			hosts[hostID] = host
-			json.NewEncoder(w).Encode(newVM)
-			return
-		}
-	}
-
-	http.Error(w, "VM not found", http.StatusNotFound)
-}
-
-func deleteVM(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	hostID := vars["hostId"]
-	vmID := vars["vmId"]
-
-	mu.Lock()
-	defer mu.Unlock()
-	host, exists := hosts[hostID]
-	if !exists {
-		http.Error(w, "Host not found", http.StatusNotFound)
-		return
-	}
-
-	for i, vm := range host.VMs {
-		if vm.ID == vmID {
-			host.VMs = append(host.VMs[:i], host.VMs[i+1:]...)
-			hosts[hostID] = host
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-	}
-
-	http.Error(w, "VM not found", http.StatusNotFound)
-}
-
-func changeVMStatus(w http.ResponseWriter, r *http.Request, status string) {
-	vars := mux.Vars(r)
-	hostID := vars["hostId"]
-	vmID := vars["vmId"]
-
-	mu.Lock()
-	defer mu.Unlock()
-	host, exists := hosts[hostID]
-	if !exists {
-		http.Error(w, "Host not found", http.StatusNotFound)
-		return
-	}
-
-	for i, vm := range host.VMs {
-		if vm.ID == vmID {
-			host.VMs[i].Status = status
-			hosts[hostID] = host
-			json.NewEncoder(w).Encode(host.VMs[i])
-			return
-		}
-	}
-
-	http.Error(w, "VM not found", http.StatusNotFound)
-}
-func distributeVM(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	vmID := vars["vmId"]
-	targetHostID := vars["targetHostId"]
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	// Find the VM and its current host
-	var currentHostID string
-	var vm VM
-	for hostID, host := range hosts {
-		for i, v := range host.VMs {
-			if v.ID == vmID {
-				currentHostID = hostID
-				vm = v
-				// Remove VM from current host
-				host.VMs = append(host.VMs[:i], host.VMs[i+1:]...)
-				hosts[hostID] = host
-				break
-			}
-		}
-		if currentHostID != "" {
-			break
-		}
-	}
-
-	if currentHostID == "" {
-		http.Error(w, "VM not found", http.StatusNotFound)
-		return
-	}
-
-	// Add VM to target host
-	targetHost, exists := hosts[targetHostID]
-	if !exists {
-		http.Error(w, "Target host not found", http.StatusNotFound)
-		return
-	}
-
-	targetHost.VMs = append(targetHost.VMs, vm)
-	hosts[targetHostID] = targetHost
-
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(vm)
 }
