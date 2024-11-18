@@ -11,20 +11,20 @@
                     "Name": "vm1",
                     "Status": ""
                 }
-                ]
-                },
+            ]
+        },
+        {
+            "Hostname": "host1",
+            "IP": "192.168.31.138",
+            "Port": "8080",
+            "Username": "admin",
+            "Password": "admin123",
+            "VMs": [
                 {
-                    "Hostname": "host1",
-                    "IP": "192.168.31.138",
-                    "Port": "8080",
-                    "Username": "admin",
-                    "Password": "admin123",
-                    "VMs": [
-                        {
-                            "Name": "vm1",
-                            "Status": ""
-                        }
-                        ]
-                        }
+                    "Name": "vm1",
+                    "Status": ""
+                }
             ]
         }
+    ]
+}
